@@ -1,0 +1,18 @@
+ const faqs = [
+    {
+      q: "Por que devo confiar nas taxas daqui?",
+      a: "As taxas são atualizadas diariamente com base em fontes verificadas do mercado paralelo de Luanda.",
+    },
+    {
+      q: "Qual é a diferença do Premium?",
+      a: "No Premium recebes 2–3 alertas diários direto no WhatsApp, com as melhores oportunidades de compra e venda.",
+    },
+    {
+      q: "Vocês vendem ou compram divisas?",
+      a: "Não. Apenas fornecemos informação confiável e atualizada para que tomes decisões seguras.",
+    },
+    {
+      q: "Como posso pagar o Premium?",
+      a: "O pagamento pode ser feito via referência multicaixa ou carteira digital. Após pagar, és adicionado à lista exclusiva de alertas.",
+    },
+  ];

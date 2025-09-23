@@ -1,0 +1,150 @@
+// src/services/api.js
+const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5000';
+const REQUEST_TIMEOUT = 30000; // 10 segundos
+
+export class ApiError extends Error {
+  constructor(message, status = 500, data = null) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+    this.data = data;
+  }
+}
+
+// Função utilitária de fetch com timeout, retry e token
+export const apiFetch = async (endpoint, options = {}, token = null, retries = 3) => {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
+
+  try {
+    const headers = { "Content-Type": "application/json", ...options.headers };
+    if (token) headers["Authorization"] = `Bearer ${token}`;
+
+    const response = await fetch(`${API_BASE_URL}${endpoint}`, { ...options, headers, signal: controller.signal });
+    clearTimeout(timeoutId);
+
+    let data = null;
+    try { data = await response.json(); } catch {}
+
+    if (!response.ok) {
+      if (response.status === 401) {
+        localStorage.removeItem('userSession');
+        window.dispatchEvent(new CustomEvent('auth-error', { detail: { message: 'Sessão expirada. Faça login novamente.' }}));
+      }
+      throw new ApiError(data?.message || response.statusText, response.status, data);
+    }
+
+    return data;
+  } catch (error) {
+    clearTimeout(timeoutId);
+
+    if (error.name === 'AbortError') throw new ApiError('Tempo limite da requisição excedido', 408);
+    if (error instanceof ApiError) throw error;
+    if (retries > 0) {
+      await new Promise(res => setTimeout(res, 1000 * (4 - retries)));
+      return apiFetch(endpoint, options, token, retries - 1);
+    }
+    throw new ApiError(error.message || 'Erro interno do servidor', 500);
+  }
+};
+
+// Validação de inputs
+export const validateInput = (data, rules = {}) => {
+  const errors = {};
+  Object.keys(rules).forEach(field => {
+    const value = data[field];
+    const rule = rules[field];
+    if (rule.required && (!value || value.toString().trim() === '')) errors[field] = `${field} é obrigatório`;
+    if (value && rule.type === 'email' && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) errors[field] = 'Email inválido';
+    if (value && rule.type === 'phone' && !/^\+244\s?9\d{8}$/.test(value)) errors[field] = 'Número de telefone angolano inválido';
+    if (value && rule.min && value.toString().length < rule.min) errors[field] = `${field} deve ter pelo menos ${rule.min} caracteres`;
+    if (value && rule.max && value.toString().length > rule.max) errors[field] = `${field} deve ter no máximo ${rule.max} caracteres`;
+    if (value && rule.pattern && !rule.pattern.test(value)) errors[field] = rule.message || `${field} tem formato inválido`;
+  });
+  return { isValid: Object.keys(errors).length === 0, errors };
+};
+
+// Hook para pegar token da sessão
+const getToken = () => JSON.parse(localStorage.getItem('userSession'))?.token;
+
+// Funções de API padronizadas
+export const fetchRates = async () => apiFetch("/rates", {}, getToken());
+
+export const updateRates = async (ratesData) => {
+  const requiredFields = ['usdBuy','usdSell','eurBuy','eurSell','zarBuy','zarSell','cadBuy','cadSell'];
+  const validation = validateInput(ratesData, requiredFields.reduce((acc, f) => ({...acc, [f]: {required:true}}), {}));
+  if (!validation.isValid) throw new ApiError('Todos os campos de taxas são obrigatórios.');
+
+  const sanitized = {};
+  Object.entries(ratesData).forEach(([k,v]) => {
+    const num = parseFloat(v);
+    if (isNaN(num) || num <= 0) throw new ApiError(`Taxa ${k} deve ser um número positivo.`);
+    sanitized[k] = num;
+  });
+
+  return apiFetch("/admin/update-rates", { method: "POST", body: JSON.stringify(sanitized) }, getToken());
+};
+
+export const upgradeToPremium = async (email) => {
+  const validation = validateInput({ email }, { email: { required: true, type: 'email' } });
+  if (!validation.isValid) throw new ApiError(validation.errors.email);
+  return apiFetch("/admin/upgrade-to-premium", { method: "POST", body: JSON.stringify({ email: email.toLowerCase().trim() }) }, getToken());
+};
+
+export const removePremium = async (email) => {
+  // validação simples
+  const validation = validateInput({ email }, { email: { required: true, type: 'email' } });
+  if (!validation.isValid) throw new ApiError(validation.errors.email);
+
+  return apiFetch(
+    "/admin/remove-premium",
+    { method: "POST", body: JSON.stringify({ email: email.toLowerCase().trim() }) },
+    getToken()
+  );
+};
+
+export const exportData = async (token) => {
+  if (!token) {
+    throw new Error('Autenticação necessária para exportar dados.');
+  }
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 30000);
+
+  try {
+    const response = await fetch(`${API_BASE_URL}/export-rates`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      signal: controller.signal,
+    });
+
+    clearTimeout(timeoutId);
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.message || "Falha na exportação de dados.");
+    }
+
+    const blob = await response.blob();
+    if (blob.size === 0) throw new Error('Arquivo de exportação vazio.');
+
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.style.display = "none";
+    a.href = url;
+    a.download = `taxas_cambio_${new Date().toISOString().split('T')[0]}.xlsx`;
+    document.body.appendChild(a);
+    a.click();
+    window.URL.revokeObjectURL(url);
+    document.body.removeChild(a);
+
+    return { success: true, message: 'Dados exportados com sucesso!' };
+  } catch (error) {
+    clearTimeout(timeoutId);
+    if (error.name === 'AbortError') throw new Error('Tempo limite para exportação excedido.');
+    throw error;
+  }
+};
