@@ -129,7 +129,18 @@ export const validateInput = (data, rules = {}) => {
 };
 
 // Hook para pegar token da sessão
-const getToken = () => JSON.parse(localStorage.getItem("userSession"))?.token;
+const getToken = () => {
+  try {
+    const raw = localStorage.getItem("userSession");
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    return parsed?.token || null;
+  } catch (err) {
+    console.warn("userSession inválido no localStorage:", err);
+    return null;
+  }
+};
+
 
 // === AUTENTICAÇÃO ===
 export const login = async (email, password) => {
@@ -142,11 +153,19 @@ export const login = async (email, password) => {
   );
   if (!validation.isValid) throw new ApiError(Object.values(validation.errors)[0]);
 
-  return apiFetch("/auth/login", {
+  const data = await apiFetch("/auth/login", {
     method: "POST",
     body: JSON.stringify({ email, password })
   });
+
+  // salvar sessão (token + user)
+  if (data?.token) {
+    localStorage.setItem("userSession", JSON.stringify({ token: data.token, user: data.user || null }));
+  }
+
+  return data;
 };
+
 
 export const register = async (email, password) => {
   const validation = validateInput(
@@ -158,18 +177,25 @@ export const register = async (email, password) => {
   );
   if (!validation.isValid) throw new ApiError(Object.values(validation.errors)[0]);
 
-  return apiFetch("/auth/register", {
+  const data = await apiFetch("/auth/register", {
     method: "POST",
     body: JSON.stringify({ email, password })
   });
+
+  if (data?.token) {
+    localStorage.setItem("userSession", JSON.stringify({ token: data.token, user: data.user || null }));
+  }
+
+  return data;
 };
+
 
 export const validateSession = async () => {
   const token = getToken();
   if (!token) throw new ApiError("Autenticação necessária.");
-  // FIXED: Add /api prefix
-  return apiFetch("/api/auth/validate", { method: "POST" }, token);
+  return apiFetch("/auth/validate", { method: "POST" }, token);
 };
+
 
 // === TAXAS ===
 export const fetchRates = async () => apiFetch("/rates", {}, getToken());
