@@ -10,7 +10,7 @@ const defaultFaqs = [
   },
   {
     q: "Qual é a diferença do Premium?",
-    a: "No Premium recebes 2–3 alertas diários direto no WhatsApp, com as melhores oportunidades de compra e venda.",
+    a: "No Premium recebes 2–3 alertas diários direto no Email, com as melhores oportunidades de compra e venda.",
   },
   {
     q: "Vocês vendem ou compram divisas?",

@@ -184,7 +184,7 @@ export default function PhoneForm() {
         </motion.div>
         <div>
           <h3 className="text-lg font-bold mb-1 text-gray-800">
-            Alertas WhatsApp
+            Alertas Email
           </h3>
           <p className="text-gray-600 text-sm">
             Receba notificações instantâneas das melhores taxas
@@ -342,7 +342,7 @@ export default function PhoneForm() {
               <li>
                 • Receba alertas quando as taxas atingirem valores favoráveis
               </li>
-              <li>• Notificações instantâneas via WhatsApp</li>
+              <li>• Notificações instantâneas via Email</li>
               <li>• Dados atualizados em tempo real</li>
               <li>• Privacidade garantida - seu número fica seguro</li>
             </ul>

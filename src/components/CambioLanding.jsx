@@ -31,7 +31,7 @@ const testimonials = [
   {
     name: "Maria Santos",
     role: "Importadora",
-    text: "Os alertas WhatsApp chegam na hora certa. Já consegui aproveitar várias oportunidades.",
+    text: "Os alertas Email chegam na hora certa. Já consegui aproveitar várias oportunidades.",
     rating: 5,
   },
 ];
@@ -39,7 +39,7 @@ const testimonials = [
 const faqs = [
   {
     q: "Como funcionam os alertas?",
-    a: "Recebe notificações instantâneas no WhatsApp quando as taxas atingem os valores que define.",
+    a: "Recebe notificações instantâneas no Email quando as taxas atingem os valores que define.",
   },
   {
     q: "As taxas são confiáveis?",
@@ -353,7 +353,7 @@ export default function Landing() {
             {[
               {
                 icon: Bell,
-                title: "Alertas WhatsApp",
+                title: "Alertas Email",
                 description:
                   "Receba notificações instantâneas quando as taxas atingem os valores que define.",
                 highlight: "Grátis",

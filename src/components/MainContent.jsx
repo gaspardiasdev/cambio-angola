@@ -189,12 +189,12 @@ export default function MainContent({
                 animate={{ opacity: 1, x: 0 }}
                 transition={{ delay: 0.4 }}
               >
-                {/* WhatsApp Alerts */}
+                {/* Email Alerts */}
                 <div className="bg-gradient-to-br from-green-50 to-emerald-50 rounded-2xl border border-green-200 overflow-hidden">
                   <div className="px-4 py-3 bg-gradient-to-r from-green-500 to-emerald-500 text-white">
                     <h4 className="font-bold text-sm flex items-center gap-2">
                       <span>💬</span>
-                      Alertas WhatsApp
+                      Alertas Email
                     </h4>
                   </div>
                   <div className="p-4">
@@ -254,7 +254,7 @@ export default function MainContent({
                 <div className="flex flex-wrap justify-center gap-4 mb-8">
                   {[
                     "📊 Gráficos Interativos",
-                    "📱 Alertas WhatsApp", 
+                    "📱 Alertas Email", 
                     "📈 30 Dias de Histórico",
                     "⚡ Notificações Instantâneas"
                   ].map((feature, index) => (

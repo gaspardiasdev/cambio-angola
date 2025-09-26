@@ -16,7 +16,7 @@ export default function CallToActionSection({
   const device = useDevice(); // 'mobile' | 'tablet' | 'desktop'
 
   const premiumBenefits = [
-    "Alertas WhatsApp ilimitados",
+    "Alertas Email ilimitados",
     "Histórico completo (30 dias)",
     "Exportação Excel",
     "Análises de tendência",
@@ -32,7 +32,7 @@ export default function CallToActionSection({
     },
     {
       q: "Qual é a diferença do Premium?",
-      a: "Usuários Premium recebem alertas personalizados via SMS/WhatsApp e análises avançadas de tendência.",
+      a: "Usuários Premium recebem alertas personalizados via SMS/Email e análises avançadas de tendência.",
       icon: "⭐",
       color: "from-purple-500 to-purple-600",
     },
@@ -135,7 +135,7 @@ export default function CallToActionSection({
               )
             }
           >
-            Alertas WhatsApp Grátis
+            Alertas Email Grátis
           </Button>
         </div>
       </div>
