@@ -16,8 +16,8 @@
   ],
   "rewrites": [
     {
-      "source": "/api/(.*)",
-      "destination": "https://cambio-angola-backend-production.up.railway.app/api/$1"
+      "source": "/((?!api).*)",
+      "destination": "/index.html"
     }
   ]
 }

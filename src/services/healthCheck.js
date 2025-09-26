@@ -2,14 +2,15 @@ class HealthCheckService {
   constructor() {
     this.endpoints = [
       'https://cambio-angola-backend-production.up.railway.app',
-      'http://localhost:5000'
+      // Remover localhost em produção para evitar conflitos
+      ...(import.meta.env.DEV ? ['http://localhost:5000'] : [])
     ];
     this.currentEndpoint = null;
     this.lastCheck = null;
     this.isChecking = false;
   }
 
-  async checkEndpoint(url, timeout = 5000) {
+  async checkEndpoint(url, timeout = 8000) {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), timeout);
 
@@ -19,7 +20,9 @@ class HealthCheckService {
         signal: controller.signal,
         headers: {
           'Accept': 'application/json',
-        }
+          'Cache-Control': 'no-cache'
+        },
+        mode: 'cors'
       });
 
       clearTimeout(timeoutId);
@@ -64,9 +67,9 @@ class HealthCheckService {
 
       if (online.length > 0) {
         this.currentEndpoint = online[0].url;
-        console.log(`Melhor endpoint encontrado: ${this.currentEndpoint} (${online[0].latency}ms)`);
+        console.log(`✅ Melhor endpoint: ${this.currentEndpoint} (${online[0].latency}ms)`);
       } else {
-        console.warn('Nenhum endpoint disponível, usando fallback');
+        console.warn('⚠️ Nenhum endpoint disponível, usando fallback');
         this.currentEndpoint = this.endpoints[0];
       }
 
@@ -80,10 +83,10 @@ class HealthCheckService {
     return this.currentEndpoint || this.endpoints[0];
   }
 
-  // Executar check a cada 30 segundos
+  // Executar check a cada 60 segundos para reduzir overhead
   startPeriodicCheck() {
     this.findBestEndpoint(); // Check inicial
-    setInterval(() => this.findBestEndpoint(), 30000);
+    setInterval(() => this.findBestEndpoint(), 60000);
   }
 }
 

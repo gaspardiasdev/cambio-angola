@@ -2,11 +2,10 @@ import { healthCheck } from './healthCheck.js';
 
 class EnhancedApiService {
   constructor() {
-    this.retryQueue = [];
-    this.isProcessingQueue = false;
-    
-    // Iniciar health checks
-    if (typeof window !== 'undefined') {
+    // Em desenvolvimento, desabilitar health checks para evitar spam CORS
+    if (import.meta.env.DEV) {
+      console.log('Desenvolvimento: health checks desabilitados');
+    } else {
       healthCheck.startPeriodicCheck();
     }
   }
@@ -18,8 +17,10 @@ class EnhancedApiService {
 
     while (attempt < maxRetries) {
       try {
-        const baseUrl = await healthCheck.findBestEndpoint();
+        // Em desenvolvimento, sempre usar Railway diretamente
+        const baseUrl = 'https://cambio-angola-backend-production.up.railway.app';
         
+        // Headers sem cache-control para evitar CORS
         const headers = {
           'Content-Type': 'application/json',
           'Accept': 'application/json',
@@ -34,7 +35,7 @@ class EnhancedApiService {
           headers['Authorization'] = `Bearer ${token}`;
         }
 
-        console.log(`Tentativa ${attempt + 1}: ${baseUrl}${endpoint}`);
+        console.log(`Tentativa ${attempt + 1}: ${baseUrl}/api${endpoint}`);
 
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 15000);
@@ -43,7 +44,8 @@ class EnhancedApiService {
           ...options,
           headers,
           signal: controller.signal,
-          credentials: 'include'
+          mode: 'cors',
+          credentials: 'omit'
         });
 
         clearTimeout(timeoutId);
@@ -52,44 +54,51 @@ class EnhancedApiService {
           const contentType = response.headers.get('content-type');
           
           if (contentType && contentType.includes('application/json')) {
-            return await response.json();
+            const data = await response.json();
+            console.log('Sucesso na requisição');
+            return data;
           } else if (contentType && contentType.includes('text')) {
-            return { message: await response.text() };
+            const text = await response.text();
+            return { message: text };
           }
           
           return response;
         }
 
-        // Status codes específicos
+        // Tratamento de erros específicos
         if (response.status === 401) {
           this.handleAuthError();
           throw new Error('Sessão expirada. Faça login novamente.');
         }
 
-        if (response.status === 429) {
-          const delay = 2000 * Math.pow(2, attempt);
-          console.log(`Rate limited, aguardando ${delay}ms`);
-          await new Promise(resolve => setTimeout(resolve, delay));
-          throw new Error('Muitas tentativas, aguarde um momento');
+        if (response.status === 404) {
+          throw new Error('Serviço temporariamente indisponível');
         }
 
-        const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.message || `Erro HTTP ${response.status}`);
+        // Tentar obter mensagem de erro
+        let errorData;
+        try {
+          errorData = await response.json();
+        } catch {
+          errorData = { message: `Erro HTTP ${response.status}` };
+        }
+        
+        throw new Error(errorData.message || `Erro ${response.status}`);
 
       } catch (error) {
         lastError = error;
         attempt++;
 
-        if (error.name === 'AbortError') {
-          console.warn(`Timeout na tentativa ${attempt}`);
-        } else if (error.message.includes('fetch')) {
-          console.warn(`Erro de rede na tentativa ${attempt}: ${error.message}`);
-        } else {
-          console.warn(`Erro na tentativa ${attempt}: ${error.message}`);
+        console.warn(`Erro na tentativa ${attempt}: ${error.message}`);
+
+        // Não fazer retry em alguns casos
+        if (error.message.includes('Sessão expirada') || 
+            error.message.includes('Token de autenticação')) {
+          break;
         }
 
         if (attempt < maxRetries) {
-          const delay = 1000 * Math.pow(2, attempt - 1);
+          const delay = Math.min(1000 * Math.pow(2, attempt - 1), 5000);
           console.log(`Aguardando ${delay}ms antes da próxima tentativa...`);
           await new Promise(resolve => setTimeout(resolve, delay));
         }
@@ -112,33 +121,85 @@ class EnhancedApiService {
 
   handleAuthError() {
     localStorage.removeItem('userSession');
-    window.dispatchEvent(new CustomEvent('auth-expired'));
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('auth-expired', {
+        detail: { message: 'Sessão expirada' }
+      }));
+    }
   }
 
-  // Método específico para Google Auth
   async googleAuth(credential, clientId) {
-    return this.makeRequest('/auth/google', {
+    console.log('Iniciando autenticação Google...');
+    const result = await this.makeRequest('/auth/google', {
       method: 'POST',
       body: JSON.stringify({ credential, clientId })
     }, false);
+    
+    if (result?.token) {
+      localStorage.setItem('userSession', JSON.stringify({
+        token: result.token,
+        user: result.user || null
+      }));
+    }
+    
+    return result;
   }
 
   async login(email, password) {
-    return this.makeRequest('/auth/login', {
+    console.log('Fazendo login...');
+    const result = await this.makeRequest('/auth/login', {
       method: 'POST',
       body: JSON.stringify({ email, password })
     }, false);
+    
+    if (result?.token) {
+      localStorage.setItem('userSession', JSON.stringify({
+        token: result.token,
+        user: result.user || null
+      }));
+    }
+    
+    return result;
   }
 
   async register(email, password) {
-    return this.makeRequest('/auth/register', {
+    console.log('Registrando usuário...');
+    const result = await this.makeRequest('/auth/register', {
       method: 'POST',
       body: JSON.stringify({ email, password })
     }, false);
+    
+    if (result?.token) {
+      localStorage.setItem('userSession', JSON.stringify({
+        token: result.token,
+        user: result.user || null
+      }));
+    }
+    
+    return result;
   }
 
   async getRates() {
+    console.log('Buscando taxas...');
     return this.makeRequest('/rates', {}, false);
+  }
+
+  async validateSession() {
+    console.log('Validando sessão...');
+    return this.makeRequest('/auth/validate', { method: 'POST' });
+  }
+
+  async createAlert(alertData) {
+    console.log('Criando alerta...');
+    return this.makeRequest('/alerts', {
+      method: 'POST',
+      body: JSON.stringify(alertData)
+    });
+  }
+
+  async getUserAlerts() {
+    console.log('Buscando alertas do usuário...');
+    return this.makeRequest('/alerts');
   }
 }
 
