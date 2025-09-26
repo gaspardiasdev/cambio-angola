@@ -1,6 +1,7 @@
 // src/services/api.js
 const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:5000";
-const REQUEST_TIMEOUT = 30000; // 30 segundos
+const REQUEST_TIMEOUT = Number(import.meta.env.VITE_API_TIMEOUT) || 30000;
+
 
 // Classe de erro padronizada
 export class ApiError extends Error {
