@@ -1,17 +1,13 @@
-/* eslint-disable no-unused-vars */
-/* eslint-disable no-case-declarations */
-// components/AuthModal.jsx
-
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { GoogleOAuthProvider, GoogleLogin } from '@react-oauth/google';
 import { useAuth } from "../context/AuthContext";
 
-const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || "your-google-client-id.apps.googleusercontent.com";
+// Usar a nova API melhorada
+import { enhancedApi} from "../services/enhancedApi";
+import {healthCheck } from "../services/healthCheck"
 
-// Adicionar este console.log:
-console.log('GOOGLE_CLIENT_ID sendo usado:', GOOGLE_CLIENT_ID);
-console.log('Todas as env vars:', import.meta.env);
+const GOOGLE_CLIENT_ID = import.meta.env.VITE_GOOGLE_CLIENT_ID || "915527090412-27cvbgjalcfvls4vl4s0e43o11u3c82t.apps.googleusercontent.com";
 
 export default function AuthModal({ isOpen, onClose, isLogin, onToggleForm }) {
   const {
@@ -32,73 +28,210 @@ export default function AuthModal({ isOpen, onClose, isLogin, onToggleForm }) {
   const [errors, setErrors] = useState({});
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+  const [networkStatus, setNetworkStatus] = useState({
+    isOnline: navigator.onLine,
+    serverStatus: 'checking',
+    currentServer: null
+  });
 
-  // Limpa formulário quando o modal abre/fecha ou troca entre login/registo
+  // Ref para controlar múltiplas chamadas Google
+  const googleAuthInProgress = useRef(false);
+  const retryCount = useRef(0);
+
+  // Monitor de conectividade melhorado
+  useEffect(() => {
+    const updateNetworkStatus = (isOnline) => {
+      setNetworkStatus(prev => ({ ...prev, isOnline }));
+      
+      if (isOnline) {
+        // Quando volta online, verificar servidor
+        checkServerStatus();
+      }
+    };
+
+    const handleOnline = () => updateNetworkStatus(true);
+    const handleOffline = () => updateNetworkStatus(false);
+
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+
+    // Check inicial do servidor
+    checkServerStatus();
+
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
+  }, []);
+
+  const checkServerStatus = async () => {
+    try {
+      setNetworkStatus(prev => ({ ...prev, serverStatus: 'checking' }));
+      
+      const bestServer = await healthCheck.findBestEndpoint();
+      
+      setNetworkStatus(prev => ({
+        ...prev,
+        serverStatus: 'online',
+        currentServer: bestServer
+      }));
+      
+      console.log(`Servidor conectado: ${bestServer}`);
+    } catch (error) {
+      setNetworkStatus(prev => ({
+        ...prev,
+        serverStatus: 'offline',
+        currentServer: null
+      }));
+      
+      console.warn('Servidor offline:', error.message);
+    }
+  };
+
+  // Limpar formulário quando modal abre/fecha
   useEffect(() => {
     if (isOpen) {
       setFormData({ email: "", password: "", confirmPassword: "" });
       setErrors({});
       setAuthMessage("");
+      retryCount.current = 0;
+      googleAuthInProgress.current = false;
     }
   }, [isOpen, isLogin, setAuthMessage]);
 
-  // Função para lidar com sucesso do Google OAuth
+  // Listener para eventos de auth personalizados
+  useEffect(() => {
+    const handleAuthSuccess = (event) => {
+      console.log('Auth success event:', event.detail);
+      setAuthMessage("Login realizado com sucesso!");
+      setTimeout(() => onClose(), 1000);
+    };
+
+    const handleAuthError = (event) => {
+      setAuthMessage(event.detail.message);
+      googleAuthInProgress.current = false;
+    };
+
+    const handleAuthExpired = () => {
+      setAuthMessage("Sessão expirada. Faça login novamente.");
+    };
+
+    window.addEventListener('auth-success', handleAuthSuccess);
+    window.addEventListener('auth-error', handleAuthError);
+    window.addEventListener('auth-expired', handleAuthExpired);
+
+    return () => {
+      window.removeEventListener('auth-success', handleAuthSuccess);
+      window.removeEventListener('auth-error', handleAuthError);
+      window.removeEventListener('auth-expired', handleAuthExpired);
+    };
+  }, [onClose]);
+
+  // Google Auth melhorado com retry e error handling
   const handleGoogleSuccess = async (credentialResponse) => {
+    // Prevenir múltiplas chamadas simultâneas
+    if (googleAuthInProgress.current) {
+      console.log('Google Auth já em progresso, ignorando...');
+      return;
+    }
+
     try {
+      googleAuthInProgress.current = true;
       setLoading(true);
       setAuthMessage("");
 
-      // Enviar credencial para o backend
-      const response = await fetch(`${process.env.REACT_APP_API_URL || 'http://localhost:5000'}/api/auth/google`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          credential: credentialResponse.credential,
-          clientId: credentialResponse.clientId
-        }),
+      console.log('Iniciando autenticação Google...', {
+        credential: credentialResponse.credential ? 'present' : 'missing',
+        clientId: credentialResponse.clientId || GOOGLE_CLIENT_ID
       });
 
-      const data = await response.json();
+      // Usar enhanced API com retry automático
+      const data = await enhancedApi.googleAuth(
+        credentialResponse.credential,
+        credentialResponse.clientId || GOOGLE_CLIENT_ID
+      );
 
-      if (!response.ok) {
-        throw new Error(data.message || 'Erro na autenticação Google');
-      }
+      if (data?.token) {
+        const userData = {
+          email: data.user?.email,
+          name: data.user?.name,
+          picture: data.user?.picture,
+          isPremium: data.user?.isPremium || false,
+          isAdmin: data.user?.isAdmin || false,
+        };
 
-      // Usar a função login existente do AuthContext
-      const userData = {
-        email: data.user.email,
-        name: data.user.name,
-        picture: data.user.picture,
-        isPremium: data.user.isPremium || false,
-        isAdmin: data.user.isAdmin || false,
-      };
+        const loginSuccess = login(data.token, userData);
 
-      const loginSuccess = login(data.token, userData);
-
-      if (loginSuccess) {
-        setAuthMessage("Login Google realizado com sucesso!");
-        setTimeout(() => {
-          onClose();
-        }, 1000);
+        if (loginSuccess) {
+          setAuthMessage("Login Google realizado com sucesso!");
+          setTimeout(() => {
+            onClose();
+          }, 1000);
+        } else {
+          throw new Error("Erro ao processar autenticação Google.");
+        }
       } else {
-        setAuthMessage("Erro ao processar autenticação Google.");
+        throw new Error(data.message || "Resposta inválida do servidor");
       }
 
     } catch (error) {
       console.error('Google OAuth Error:', error);
-      setAuthMessage(error.message || 'Erro na autenticação com Google');
+      
+      // Implementar retry inteligente
+      if (retryCount.current < 2 && (
+        error.message.includes('network') || 
+        error.message.includes('timeout') ||
+        error.message.includes('fetch')
+      )) {
+        retryCount.current++;
+        setAuthMessage(`Tentativa ${retryCount.current + 1}/3... Verificando conexão.`);
+        
+        setTimeout(() => {
+          googleAuthInProgress.current = false;
+          handleGoogleSuccess(credentialResponse);
+        }, 2000);
+        return;
+      }
+      
+      let errorMessage = 'Erro na autenticação com Google';
+      
+      if (error.message.includes('network') || error.message.includes('fetch')) {
+        errorMessage = 'Erro de conexão. Verifique sua internet e tente novamente.';
+      } else if (error.message.includes('timeout')) {
+        errorMessage = 'Conexão lenta detectada. Tente novamente.';
+      } else if (error.message.includes('Token do Google inválido')) {
+        errorMessage = 'Sessão Google expirada. Tente fazer login novamente.';
+      } else if (error.message) {
+        errorMessage = error.message;
+      }
+      
+      setAuthMessage(errorMessage);
+      retryCount.current = 0;
+      
     } finally {
       setLoading(false);
+      googleAuthInProgress.current = false;
     }
   };
 
-  const handleGoogleError = () => {
-    setAuthMessage('Falha na autenticação Google. Tente novamente.');
+  const handleGoogleError = (error) => {
+    console.error('Google Login Error:', error);
+    googleAuthInProgress.current = false;
+    
+    let message = 'Falha na autenticação Google.';
+    
+    if (typeof error === 'string') {
+      if (error.includes('popup_blocked')) {
+        message = 'Popup bloqueado. Permita popups para este site e tente novamente.';
+      } else if (error.includes('popup_closed')) {
+        message = 'Popup fechado antes de completar. Tente novamente.';
+      }
+    }
+    
+    setAuthMessage(message);
   };
 
-  // Validação de campos (mantém a mesma lógica existente)
+  // Validação melhorada
   const validateField = (name, value) => {
     const newErrors = { ...errors };
 
@@ -135,9 +268,6 @@ export default function AuthModal({ isOpen, onClose, isLogin, onToggleForm }) {
           }
         }
         break;
-
-      default:
-        break;
     }
 
     setErrors(newErrors);
@@ -170,8 +300,8 @@ export default function AuthModal({ isOpen, onClose, isLogin, onToggleForm }) {
 
     try {
       if (!isLogin) {
-        // Registro
-        const data = await registerUser(formData.email, formData.password);
+        // Registro usando enhanced API
+        const data = await enhancedApi.register(formData.email, formData.password);
 
         if (data.success || data.message === "Utilizador registado com sucesso!") {
           setAuthMessage("Registo bem-sucedido! Entrando automaticamente...");
@@ -190,7 +320,6 @@ export default function AuthModal({ isOpen, onClose, isLogin, onToggleForm }) {
               setAuthMessage("Erro ao processar login automático. Faça login manualmente.");
             }
           } else {
-            // Switch to login form
             onToggleForm();
             setFormData(prev => ({ ...prev, password: "", confirmPassword: "" }));
           }
@@ -198,8 +327,8 @@ export default function AuthModal({ isOpen, onClose, isLogin, onToggleForm }) {
           setAuthMessage(data.message || "Erro no registo");
         }
       } else {
-        // Login
-        const data = await loginUser(formData.email, formData.password);
+        // Login usando enhanced API
+        const data = await enhancedApi.login(formData.email, formData.password);
 
         if (data.token) {
           const userData = {
@@ -229,6 +358,12 @@ export default function AuthModal({ isOpen, onClose, isLogin, onToggleForm }) {
 
   if (!isOpen) return null;
 
+  const canSubmit = networkStatus.isOnline && 
+                   networkStatus.serverStatus === 'online' && 
+                   !loading && 
+                   !authLoading && 
+                   Object.keys(errors).length === 0;
+
   return (
     <GoogleOAuthProvider clientId={GOOGLE_CLIENT_ID}>
       <AnimatePresence>
@@ -252,7 +387,7 @@ export default function AuthModal({ isOpen, onClose, isLogin, onToggleForm }) {
                 className="absolute top-4 right-4 text-white/80 hover:text-white text-2xl font-bold transition-colors"
                 disabled={loading}
               >
-                &times;
+                ×
               </button>
               <div className="flex items-center gap-3">
                 <motion.div
@@ -260,7 +395,7 @@ export default function AuthModal({ isOpen, onClose, isLogin, onToggleForm }) {
                   animate={{ rotate: [0, 360] }}
                   transition={{ duration: 20, repeat: Infinity, ease: "linear" }}
                 >
-                  <span className="text-2xl">🔒</span>
+                  <span className="text-2xl">🔐</span>
                 </motion.div>
                 <div>
                   <h3 className="text-xl font-bold">
@@ -277,19 +412,68 @@ export default function AuthModal({ isOpen, onClose, isLogin, onToggleForm }) {
 
             {/* Form */}
             <div className="p-6">
-              {/* Botão Google OAuth */}
+              {/* Status da Conexão */}
+              {(!networkStatus.isOnline || networkStatus.serverStatus !== 'online') && (
+                <div className="mb-4 p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
+                  <div className="text-yellow-800 text-sm text-center">
+                    {!networkStatus.isOnline ? (
+                      "Sem conexão com a internet"
+                    ) : networkStatus.serverStatus === 'checking' ? (
+                      "Verificando servidor..."
+                    ) : (
+                      "Servidor temporariamente indisponível"
+                    )}
+                  </div>
+                  {networkStatus.serverStatus === 'offline' && (
+                    <button
+                      onClick={checkServerStatus}
+                      className="mt-2 w-full text-xs bg-yellow-200 hover:bg-yellow-300 text-yellow-800 py-1 px-2 rounded transition-colors"
+                    >
+                      Tentar Novamente
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {/* Status do servidor atual */}
+              {networkStatus.currentServer && networkStatus.serverStatus === 'online' && (
+                <div className="mb-4 text-xs text-green-600 text-center">
+                  Conectado: {networkStatus.currentServer.replace('https://', '')}
+                </div>
+              )}
+
+              {/* Botão Google OAuth Melhorado */}
               <div className="mb-6 flex justify-center">
-                <GoogleLogin
-                  onSuccess={handleGoogleSuccess}
-                  onError={handleGoogleError}
-                  size="large"
-                  theme="outline"
-                  text={isLogin ? "signin_with" : "signup_with"}
-                  shape="rectangular"
-                  logo_alignment="left"
-                  width="320"
-                  disabled={loading || authLoading}
-                />
+                <div className="w-full relative">
+                  {googleAuthInProgress.current && (
+                    <div className="absolute inset-0 bg-white/80 flex items-center justify-center z-10 rounded-lg">
+                      <div className="flex items-center gap-2 text-sm text-gray-600">
+                        <motion.div
+                          className="w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full"
+                          animate={{ rotate: 360 }}
+                          transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
+                        />
+                        Autenticando...
+                      </div>
+                    </div>
+                  )}
+                  <GoogleLogin
+                    onSuccess={handleGoogleSuccess}
+                    onError={handleGoogleError}
+                    size="large"
+                    theme="outline"
+                    text={isLogin ? "signin_with" : "signup_with"}
+                    shape="rectangular"
+                    logo_alignment="left"
+                    width="100%"
+                    disabled={!canSubmit || googleAuthInProgress.current}
+                    useOneTap={false}
+                    auto_select={false}
+                    cancel_on_tap_outside={true}
+                    ux_mode="popup"
+                    hosted_domain=""
+                  />
+                </div>
               </div>
 
               {/* Divisor */}
@@ -302,46 +486,39 @@ export default function AuthModal({ isOpen, onClose, isLogin, onToggleForm }) {
               <form onSubmit={handleSubmit} className="space-y-4">
                 {/* Email */}
                 <div>
-                  <label
-                    htmlFor="email"
-                    className="block text-sm font-medium text-gray-700 mb-1"
-                  >
+                  <label htmlFor="email" className="block text-sm font-medium text-gray-700 mb-1">
                     Email
                   </label>
-                  <div className="relative">
-                    <input
-                      type="email"
-                      id="email"
-                      name="email"
-                      value={formData.email}
-                      onChange={handleInputChange}
-                      placeholder="exemplo@email.com"
-                      className={`w-full p-3 border rounded-lg focus:outline-none focus:ring-2 transition ${
-                        errors.email
-                          ? "border-red-500 focus:ring-red-500"
-                          : "border-gray-300 focus:ring-blue-500"
-                      }`}
-                      required
-                      disabled={loading}
-                    />
-                    {errors.email && (
-                      <motion.p
-                        className="mt-1 text-sm text-red-600"
-                        initial={{ opacity: 0, y: -5 }}
-                        animate={{ opacity: 1, y: 0 }}
-                      >
-                        {errors.email}
-                      </motion.p>
-                    )}
-                  </div>
+                  <input
+                    type="email"
+                    id="email"
+                    name="email"
+                    value={formData.email}
+                    onChange={handleInputChange}
+                    placeholder="exemplo@email.com"
+                    className={`w-full p-3 border rounded-lg focus:outline-none focus:ring-2 transition ${
+                      errors.email
+                        ? "border-red-500 focus:ring-red-500"
+                        : "border-gray-300 focus:ring-blue-500"
+                    }`}
+                    required
+                    disabled={!canSubmit}
+                    autoComplete="email"
+                  />
+                  {errors.email && (
+                    <motion.p
+                      className="mt-1 text-sm text-red-600"
+                      initial={{ opacity: 0, y: -5 }}
+                      animate={{ opacity: 1, y: 0 }}
+                    >
+                      {errors.email}
+                    </motion.p>
+                  )}
                 </div>
 
                 {/* Senha */}
                 <div>
-                  <label
-                    htmlFor="password"
-                    className="block text-sm font-medium text-gray-700 mb-1"
-                  >
+                  <label htmlFor="password" className="block text-sm font-medium text-gray-700 mb-1">
                     Senha
                   </label>
                   <div className="relative">
@@ -351,16 +528,15 @@ export default function AuthModal({ isOpen, onClose, isLogin, onToggleForm }) {
                       name="password"
                       value={formData.password}
                       onChange={handleInputChange}
-                      placeholder={
-                        isLogin ? "Sua senha" : "Mínimo 6 caracteres"
-                      }
+                      placeholder={isLogin ? "Sua senha" : "Mínimo 6 caracteres"}
                       className={`w-full p-3 border rounded-lg focus:outline-none focus:ring-2 pr-10 transition ${
                         errors.password
                           ? "border-red-500 focus:ring-red-500"
                           : "border-gray-300 focus:ring-blue-500"
                       }`}
                       required
-                      disabled={loading}
+                      disabled={!canSubmit}
+                      autoComplete={isLogin ? "current-password" : "new-password"}
                     />
                     <button
                       type="button"
@@ -390,10 +566,7 @@ export default function AuthModal({ isOpen, onClose, isLogin, onToggleForm }) {
                     exit={{ opacity: 0, height: 0 }}
                     transition={{ duration: 0.3 }}
                   >
-                    <label
-                      htmlFor="confirmPassword"
-                      className="block text-sm font-medium text-gray-700 mb-1"
-                    >
+                    <label htmlFor="confirmPassword" className="block text-sm font-medium text-gray-700 mb-1">
                       Confirmar Senha
                     </label>
                     <div className="relative">
@@ -410,7 +583,8 @@ export default function AuthModal({ isOpen, onClose, isLogin, onToggleForm }) {
                             : "border-gray-300 focus:ring-blue-500"
                         }`}
                         required
-                        disabled={loading}
+                        disabled={!canSubmit}
+                        autoComplete="new-password"
                       />
                       <button
                         type="button"
@@ -436,36 +610,28 @@ export default function AuthModal({ isOpen, onClose, isLogin, onToggleForm }) {
                 {/* Botão de submit */}
                 <motion.button
                   type="submit"
-                  disabled={loading || authLoading || Object.keys(errors).length > 0}
+                  disabled={!canSubmit}
                   className={`w-full py-3 rounded-lg font-bold text-white transition-all ${
-                    loading || authLoading || Object.keys(errors).length > 0
+                    !canSubmit
                       ? "bg-gray-400 cursor-not-allowed"
                       : "bg-gradient-to-r from-blue-500 to-purple-600 hover:from-blue-600 hover:to-purple-700 shadow-lg hover:shadow-xl"
                   }`}
-                  whileHover={
-                    !loading && !authLoading && Object.keys(errors).length === 0
-                      ? { scale: 1.02 }
-                      : {}
-                  }
-                  whileTap={
-                    !loading && !authLoading && Object.keys(errors).length === 0
-                      ? { scale: 0.98 }
-                      : {}
-                  }
+                  whileHover={canSubmit ? { scale: 1.02 } : {}}
+                  whileTap={canSubmit ? { scale: 0.98 } : {}}
                 >
                   {loading || authLoading ? (
                     <div className="flex items-center justify-center gap-2">
                       <motion.div
                         className="w-4 h-4 border-2 border-white border-t-transparent rounded-full"
                         animate={{ rotate: 360 }}
-                        transition={{
-                          duration: 1,
-                          repeat: Infinity,
-                          ease: "linear",
-                        }}
+                        transition={{ duration: 1, repeat: Infinity, ease: "linear" }}
                       />
                       {isLogin ? "Entrando..." : "Registando..."}
                     </div>
+                  ) : !networkStatus.isOnline ? (
+                    "Sem conexão"
+                  ) : networkStatus.serverStatus !== 'online' ? (
+                    "Servidor indisponível"
                   ) : isLogin ? (
                     "Entrar"
                   ) : (

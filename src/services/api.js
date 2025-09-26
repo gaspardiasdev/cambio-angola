@@ -1,4 +1,6 @@
+/* eslint-disable no-unused-vars */
 // src/services/api.js
+import { healthCheck } from './healthCheck.js';
 const API_BASE_URL = import.meta.env.VITE_API_URL || "http://localhost:5000";
 const REQUEST_TIMEOUT = Number(import.meta.env.VITE_API_TIMEOUT) || 30000;
 
@@ -14,93 +16,71 @@ export class ApiError extends Error {
 }
 
 // Melhorar em api.js
-export const apiFetch = async (endpoint, options = {}, token = null, retries = 3) => {
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
+export const apiFetchWithFallback = async (endpoint, options = {}, token = null, retries = 2) => {
+  const urls = [
+    import.meta.env.VITE_API_URL,
+    "https://cambio-angola-backend-production.up.railway.app",
+    "http://localhost:5000"
+  ].filter(Boolean);
+  
+  let lastError;
+  
+  for (const baseUrl of urls) {
+    try {
+      console.log(`Tentando conectar com: ${baseUrl}`);
+      
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 10000);
 
-  try {
-    const headers = { 
-      "Content-Type": "application/json", 
-      ...options.headers 
-    };
-    
-    if (token) {
-      headers["Authorization"] = `Bearer ${token}`;
-    }
-
-    const response = await fetch(`${API_BASE_URL}/api${endpoint}`, {
-      ...options,
-      headers,
-      signal: controller.signal,
-    });
-
-    clearTimeout(timeoutId);
-
-    // CORREÇÃO: Melhor handling de diferentes tipos de resposta
-    let data = null;
-    const contentType = response.headers.get("content-type");
-    
-    if (contentType && contentType.includes("application/json")) {
-      try {
-        data = await response.json();
-      } catch (parseError) {
-        console.warn("Erro ao fazer parse do JSON:", parseError);
-        data = { message: "Resposta inválida do servidor" };
+      const headers = { 
+        "Content-Type": "application/json", 
+        ...options.headers 
+      };
+      
+      if (token) {
+        headers["Authorization"] = `Bearer ${token}`;
       }
-    } else if (contentType && contentType.includes("text")) {
-      data = { message: await response.text() };
-    }
 
-    if (!response.ok) {
-      // CORREÇÃO: Handling mais específico por status code
-      switch (response.status) {
-        case 401:
-          localStorage.removeItem("userSession");
-          window.dispatchEvent(
-            new CustomEvent("auth-error", {
-              detail: { message: "Sessão expirada. Faça login novamente." },
-            })
-          );
-          break;
-        case 403:
-          throw new ApiError("Acesso negado", 403, data);
-        case 404:
-          throw new ApiError("Recurso não encontrado", 404, data);
-        case 429:
-          throw new ApiError("Muitas tentativas. Tente novamente mais tarde.", 429, data);
-        default:
-          throw new ApiError(
-            data?.message || `Erro HTTP ${response.status}`,
-            response.status,
-            data
-          );
+      const response = await fetch(`${baseUrl}/api${endpoint}`, {
+        ...options,
+        headers,
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (response.ok) {
+        console.log(`Conectado com sucesso: ${baseUrl}`);
+        
+        // Atualizar a URL base para próximas chamadas
+        if (baseUrl !== API_BASE_URL) {
+          console.log(`Mudando URL base para: ${baseUrl}`);
+        }
+        
+        const contentType = response.headers.get("content-type");
+        
+        if (contentType && contentType.includes("application/json")) {
+          return await response.json();
+        } else if (contentType && contentType.includes("text")) {
+          return { message: await response.text() };
+        }
+        
+        return response;
+      } else {
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
       }
+      
+    } catch (error) {
+      console.warn(`Falhou conectar com ${baseUrl}:`, error.message);
+      lastError = error;
+      continue;
     }
-
-    return data;
-  } catch (error) {
-    clearTimeout(timeoutId);
-
-    if (error.name === "AbortError") {
-      throw new ApiError("Tempo limite da requisição excedido", 408);
-    }
-
-    if (error instanceof ApiError) throw error;
-
-    // CORREÇÃO: Retry mais inteligente
-    if (retries > 0 && !navigator.onLine) {
-      // Se offline, aguardar mais tempo
-      await new Promise((resolve) => setTimeout(resolve, 5000));
-      return apiFetch(endpoint, options, token, retries - 1);
-    }
-
-    throw new ApiError(
-      error.message.includes("Failed to fetch") || error.message.includes("NetworkError")
-        ? "Erro de conectividade. Verifique sua ligação à internet."
-        : error.message || "Erro interno do servidor",
-      500
-    );
   }
+  
+  throw new ApiError(
+    `Não foi possível conectar com nenhum servidor. Último erro: ${lastError?.message}`,
+    503
+  );
 };
 
 // Validação de inputs
@@ -154,7 +134,7 @@ export const login = async (email, password) => {
   );
   if (!validation.isValid) throw new ApiError(Object.values(validation.errors)[0]);
 
-  const data = await apiFetch("/auth/login", {
+  const data = await apiFetchWithFallback("/auth/login", {
     method: "POST",
     body: JSON.stringify({ email, password })
   });
@@ -178,7 +158,7 @@ export const register = async (email, password) => {
   );
   if (!validation.isValid) throw new ApiError(Object.values(validation.errors)[0]);
 
-  const data = await apiFetch("/auth/register", {
+  const data = await apiFetchWithFallback("/auth/register", {
     method: "POST",
     body: JSON.stringify({ email, password })
   });
@@ -194,17 +174,17 @@ export const register = async (email, password) => {
 export const validateSession = async () => {
   const token = getToken();
   if (!token) throw new ApiError("Autenticação necessária.");
-  return apiFetch("/auth/validate", { method: "POST" }, token);
+  return apiFetchWithFallback("/auth/validate", { method: "POST" }, token);
 };
 
 
 // === TAXAS ===
-export const fetchRates = async () => apiFetch("/rates", {}, getToken());
+export const fetchRates = async () => apiFetchWithFallback("/rates", {}, getToken());
 
 export const fetchRatesStats = async () => {
   const token = getToken();
   if (!token) throw new ApiError("Autenticação necessária.");
-  return apiFetch("/rates/stats", {}, token);
+  return apiFetchWithFallback("/rates/stats", {}, token);
 };
 
 // === ALERTAS ===
@@ -234,7 +214,7 @@ export const createAlert = async (alertData) => {
   if (!["usd", "eur", "zar", "cad"].includes(sanitizedData.currency))
     throw new ApiError("Moeda não suportada.");
 
-  return apiFetch("/alerts", {
+  return apiFetchWithFallback("/alerts", {
     method: "POST",
     body: JSON.stringify(sanitizedData)
   }, token);
@@ -243,7 +223,7 @@ export const createAlert = async (alertData) => {
 export const fetchUserAlerts = async () => {
   const token = getToken();
   if (!token) throw new ApiError("Autenticação necessária.");
-  return apiFetch("/alerts", {}, token);
+  return apiFetchWithFallback("/alerts", {}, token);
 };
 
 export const deleteAlert = async (alertId) => {
@@ -251,7 +231,7 @@ export const deleteAlert = async (alertId) => {
   if (!token) throw new ApiError("Autenticação necessária.");
   if (!alertId || typeof alertId !== "string")
     throw new ApiError("ID do alerta inválido.");
-  return apiFetch(`/alerts/${alertId}`, { method: "DELETE" }, token);
+  return apiFetchWithFallback(`/alerts/${alertId}`, { method: "DELETE" }, token);
 };
 
 // === SIMULADOR ===
@@ -267,7 +247,7 @@ export const simulateExchange = async (simulationData) => {
   if (!validation.isValid)
     throw new ApiError(Object.values(validation.errors)[0]);
 
-  return apiFetch("/simulate", {
+  return apiFetchWithFallback("/simulate", {
     method: "POST",
     body: JSON.stringify(simulationData)
   }, token);
@@ -284,7 +264,7 @@ export const savePhoneNumber = async (phoneNumber) => {
   );
   if (!validation.isValid) throw new ApiError(validation.errors.phoneNumber);
 
-  return apiFetch("/user/phone", {
+  return apiFetchWithFallback("/user/phone", {
     method: "POST",
     body: JSON.stringify({ phoneNumber: phoneNumber.trim() })
   }, token);
@@ -366,7 +346,7 @@ export const updateRates = async (ratesData) => {
     sanitized[k] = num;
   });
 
-  return apiFetch("/admin/rates", {
+  return apiFetchWithFallback("/admin/rates", {
     method: "POST",
     body: JSON.stringify(sanitized)
   }, token);
@@ -375,7 +355,7 @@ export const updateRates = async (ratesData) => {
 export const fetchUsers = async () => {
   const token = getToken();
   if (!token) throw new ApiError("Autenticação necessária.");
-  return apiFetch("/admin/users", {}, token);
+  return apiFetchWithFallback("/admin/users", {}, token);
 };
 
 export const updateUserPremium = async (userId, isPremium) => {
@@ -387,7 +367,7 @@ export const updateUserPremium = async (userId, isPremium) => {
     throw new ApiError("ID de usuário inválido. Use o ID do MongoDB.");
   }
 
-  return apiFetch(`/admin/users/${userId}/premium`, {
+  return apiFetchWithFallback(`/admin/users/${userId}/premium`, {
     method: "PATCH",
     body: JSON.stringify({ isPremium })
   }, token);
@@ -423,7 +403,7 @@ export const updateUserPremiumByEmail = async (email, isPremium) => {
     throw new ApiError("Email inválido.");
   }
 
-  return apiFetch(`/admin/users/email/${encodeURIComponent(email)}/premium`, {
+  return apiFetchWithFallback(`/admin/users/email/${encodeURIComponent(email)}/premium`, {
     method: "PATCH",
     body: JSON.stringify({ isPremium })
   }, token);
@@ -464,7 +444,7 @@ export const findUserByEmail = async (email) => {
 export const fetchAllAlerts = async () => {
   const token = getToken();
   if (!token) throw new ApiError("Autenticação de administrador necessária.");
-  return apiFetch("/admin/alerts", {}, token);
+  return apiFetchWithFallback("/admin/alerts", {}, token);
 };
 
 export const googleAuth = async (googleCredential) => {
@@ -474,7 +454,7 @@ export const googleAuth = async (googleCredential) => {
   );
   if (!validation.isValid) throw new ApiError(Object.values(validation.errors)[0]);
 
-  return apiFetch("/auth/google", {
+  return apiFetchWithFallback("/auth/google", {
     method: "POST",
     body: JSON.stringify({
       credential: googleCredential.credential,
